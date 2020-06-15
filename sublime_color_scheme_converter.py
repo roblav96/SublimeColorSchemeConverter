@@ -7,7 +7,7 @@ Converts sublime-color-scheme json files into tmTheme plist files.
 import os
 import re
 import json
-import plistlib
+#import plistlib
 import colorsys
 import traceback
 import collections
@@ -15,13 +15,13 @@ import collections
 import sublime
 import sublime_plugin
 
-from SublimeColorSchemeConverter.lib import plistlib
+from .lib import plistlib
 
-re_var = re.compile("var\([^\)]+\)")
-re_alpha = re.compile("alpha\(((0\.)?[0-9]+)\)")
-re_hex = re.compile("(#[0-9,a-z,A-Z]{6})([0-9,a-z,A-Z]{2})?")
-re_rgb = re.compile("rgb\((\d+),\s?(\d+),\s?(\d+)(,\s?(\d+\.?\d*))?\)")
-re_hsl = re.compile("hsl\((\d+),\s?(\d+)%,\s?(\d+)%(,\s?(\d+\.?\d*))?\)")
+re_var = re.compile(r"var\([^\)]+\)")
+re_alpha = re.compile(r"alpha\(((0\.)?[0-9]+)\)")
+re_hex = re.compile(r"(#[0-9,a-z,A-Z]{6})([0-9,a-z,A-Z]{2})?")
+re_rgb = re.compile(r"rgb\((\d+),\s?(\d+),\s?(\d+)(,\s?(\d+\.?\d*))?\)")
+re_hsl = re.compile(r"hsl\((\d+),\s?(\d+)%,\s?(\d+)%(,\s?(\d+\.?\d*))?\)")
 
 def alpha_to_hex(a):
     return "{:02x}".format(int(255*float(a)))
@@ -49,8 +49,8 @@ def get_alpha_hex(hexcode):
         return int(hexcode[7:], 16)
 
 def match_hex(string):
-    match = re_hex.search(string)
     result = None
+    match = re_hex.search(string)
     if match:
         result = match.group(1)
         alpha = get_alpha_adjuster(string)
@@ -90,7 +90,7 @@ def try_match_color(string):
     if not hexcode:
         hexcode = match_hsl(string)
     if hexcode:
-        alpha = get_alpha_adjuster(string, get_alpha_hex(hexcode))
+        alpha = get_alpha_adjuster(string, None)
         if alpha:
             hexcode = hexa_to_hex(hexcode[:7], alpha)
     else:
@@ -114,7 +114,8 @@ class ConvertSublimeColorSchemeCommand(sublime_plugin.TextCommand):
         )
 
     def parse_color(self, key, variables):
-        if key in list(variables):
+        if key in variables.keys():
+            print(variables[key], key, try_match_color(variables[key]))
             return try_match_color(variables[key])
         else:
             var = re_var.search(key)
@@ -131,12 +132,6 @@ class ConvertSublimeColorSchemeCommand(sublime_plugin.TextCommand):
             parsed[self.convert_name(key)] = self.parse_color(value, variables)
         return parsed
 
-    def parse_scope(self, scope):
-        parsed = self.convert_name(scope)
-        parsed = re.sub("\s(-|\|)\s", ", ", parsed)
-        parsed = re.sub("\s*(\(|\))\s*", " ", parsed)
-        return parsed
-
     def parse_rules(self, rules, variables):
         parsed = []
         for settings in rules:
@@ -146,7 +141,7 @@ class ConvertSublimeColorSchemeCommand(sublime_plugin.TextCommand):
                 rule["name"] = name
             scope = settings.pop("scope", None)
             if scope:
-                rule["scope"] = self.parse_scope(scope)
+                rule["scope"] = scope
             rule["settings"] = self.parse_settings(settings, variables)
             parsed.append(rule)
         return parsed
@@ -161,6 +156,10 @@ class ConvertSublimeColorSchemeCommand(sublime_plugin.TextCommand):
         for key in list(variables):
             variables["var({})".format(key)] = variables.pop(key)
 
+        # handle nested variables
+        for key in variables.keys():
+            variables[key] = self.parse_color(variables[key], variables)
+
         settings = self.parse_settings(globals_, variables)
         rules = self.parse_rules(rules, variables)
         self.theme = {
@@ -172,8 +171,8 @@ class ConvertSublimeColorSchemeCommand(sublime_plugin.TextCommand):
     def convert(self):
         error = False
         try:
-            dumps = plistlib.dumps(self.theme, sort_keys=False)
-            self.output = dumps.decode("UTF-8")
+            plistbytes = plistlib.dumps(self.theme, sort_keys=False)
+            self.output = plistbytes.decode('UTF-8')
         except Exception:
             error = True
             sublime.error_message("Could not convert Sublime Color Scheme")
@@ -182,27 +181,17 @@ class ConvertSublimeColorSchemeCommand(sublime_plugin.TextCommand):
         return error
 
     def read_source(self):
-        error = False
-        self.filename = self.view.file_name()
-        try:
-            if self.filename and os.path.exists(self.filename):
-                with open(self.filename) as sublime_color_scheme:
-                    self.theme = json.load(sublime_color_scheme)
-        except Exception:
-            error = True
-            sublime.error_message("Could not read source")
-            print("SublimeColorSchemeConverter:")
-            print(traceback.format_exc())
-        return error
+        self.theme = sublime.decode_value(self.view.substr(sublime.Region(0, self.view.size())))
+        return False
 
     def write_buffer(self, edit):
         error = False
-        output_name = os.path.splitext(os.path.basename(self.filename))[0] \
-                      + ".tmTheme"
+        #output_name = os.path.splitext(os.path.basename(self.filename))[0] \
+        #              + ".tmTheme"
         try:
             self.output_view = self.view.window().new_file()
             self.output_view.set_encoding("UTF-8")
-            self.output_view.set_name(output_name)
+            #self.output_view.set_name(output_name)
             self.output_view.replace(
                 edit,
                 sublime.Region(0, self.view.size()),
